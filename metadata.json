@@ -1,0 +1,8 @@
+{
+  "name": "예배계획",
+  "description": "삼일예배와 주일예배의 설교장소, 설교주제, 설교자, 묵도성구를 날짜순으로 기록하고 텔레그램 보고 양식으로 자동 변환 및 복사하는 웹 애플리케이션입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
