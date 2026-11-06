@@ -694,8 +694,12 @@ export default function App() {
   }, [entries, extractStartDate, extractEndDate, onlyFilledRows]);
 
   const telegramOutputText = useMemo(() => {
-    const lines = extractedEntries.map((entry) => formatTelegramLine(entry));
-    return lines.join(doubleLineBreak ? '\n\n' : '\n');
+    if (extractedEntries.length === 0) return '';
+    const numberedLines = extractedEntries.map(
+      (entry, idx) => `${idx + 1}. ${formatTelegramLine(entry)}`
+    );
+    const sep = doubleLineBreak ? '\n\n' : '\n';
+    return ['✅예배 일정', ...numberedLines].join(sep);
   }, [extractedEntries, doubleLineBreak]);
 
   const filledCount = useMemo(
@@ -720,8 +724,8 @@ export default function App() {
   };
 
   // Copy a single row's formatted string
-  const handleCopySingleRow = async (entry: WorshipEntry) => {
-    const line = formatTelegramLine(entry);
+  const handleCopySingleRow = async (entry: WorshipEntry, rowIndex: number) => {
+    const line = `${rowIndex + 1}. ${formatTelegramLine(entry)}`;
     try {
       await navigator.clipboard.writeText(line);
       setCopiedRowId(entry.id);
@@ -1181,7 +1185,11 @@ export default function App() {
                                     )
                                   }
                                   placeholder="입력해주세요 (예: 빠스따사)"
-                                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-500"
+                                  className={`w-full px-2.5 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                    entry.locationCustom.trim()
+                                      ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
+                                      : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
+                                  }`}
                                 />
                               )}
                             </div>
@@ -1199,7 +1207,11 @@ export default function App() {
                                 updateEntry(entry.id, 'topic', e.target.value)
                               }
                               placeholder="입력해주세요 (예: 중등 25과 신천지 예수교 증거장막성전)"
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400"
+                              className={`w-full px-3 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                entry.topic.trim()
+                                  ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
+                                  : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
+                              }`}
                             />
                           </div>
                         </div>
@@ -1255,7 +1267,11 @@ export default function App() {
                                     )
                                   }
                                   placeholder="입력해주세요"
-                                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-500"
+                                  className={`w-full px-2.5 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                    entry.preacherCustom.trim()
+                                      ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
+                                      : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
+                                  }`}
                                 />
                               )}
                             </div>
@@ -1273,11 +1289,15 @@ export default function App() {
                                 updateEntry(entry.id, 'scripture', e.target.value)
                               }
                               placeholder="입력해주세요 (예: 마13:24-27)"
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400"
+                              className={`w-full px-3 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                entry.scripture.trim()
+                                  ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
+                                  : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
+                              }`}
                             />
                           </div>
 
-                          {/* 5. 특이사항 Input (Optional) */}
+                          {/* 5. 특이사항 Input (Optional - Soft Yellow Tint) */}
                           <div className="md:col-span-4">
                             <label className="block text-xs font-medium text-slate-500 mb-1">
                               5. 특이사항{' '}
@@ -1292,7 +1312,7 @@ export default function App() {
                                 updateEntry(entry.id, 'note', e.target.value)
                               }
                               placeholder="입력해주세요 (선택사항)"
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400"
+                              className="w-full px-3 py-1.5 text-xs bg-amber-50 border border-amber-200 rounded-lg text-slate-900 placeholder:text-amber-700/50 focus:bg-amber-50/70 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 transition-colors"
                             />
                           </div>
 
@@ -1310,7 +1330,9 @@ export default function App() {
 
                             <button
                               type="button"
-                              onClick={() => handleCopySingleRow(entry)}
+                              onClick={() =>
+                                handleCopySingleRow(entry, originalIndex)
+                              }
                               title="이 줄만 복사"
                               className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                             >
@@ -1336,8 +1358,11 @@ export default function App() {
 
                         {/* Live Inline Formatted Preview Line */}
                         <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500 font-mono-tabular">
-                          <span className="truncate" title={formattedLine}>
-                            {formattedLine}
+                          <span
+                            className="truncate"
+                            title={`${originalIndex + 1}. ${formattedLine}`}
+                          >
+                            {originalIndex + 1}. {formattedLine}
                           </span>
                           <span className="shrink-0 text-[11px] text-slate-400">
                             {filled ? '작성됨' : '미작성'}
