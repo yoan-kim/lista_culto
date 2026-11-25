@@ -206,7 +206,7 @@ function generateMonthlySchedule(
 
 /**
  * Formats a single WorshipEntry into the exact Telegram line requested:
- * [장소]MM월DD일(삼일 또는 주일) 설교주제{설교자}/묵도:성경구절 [특이사항 : ㅇㅇㅇ]
+ * [장소] MM월DD일(삼일 또는 주일) 설교주제 {설교자}/묵도:성경구절 [특이사항 : ㅇㅇㅇ]
  * If note (특이사항) is empty, nothing extra is appended.
  */
 function formatTelegramLine(entry: WorshipEntry): string {
@@ -226,7 +226,8 @@ function formatTelegramLine(entry: WorshipEntry): string {
   const scriptureText = entry.scripture.trim();
   const noteText = (entry.note || '').trim();
 
-  const baseLine = `[${locationText}]${mm}월${dd}일(${entry.worshipType}) ${topicText}{${preacherText}}/묵도:${scriptureText}`;
+  const topicPart = topicText.length > 0 ? `${topicText} ` : '';
+  const baseLine = `[${locationText}] ${mm}월${dd}일(${entry.worshipType}) ${topicPart}{${preacherText}}/묵도:${scriptureText}`;
 
   if (noteText.length > 0) {
     return `${baseLine} [특이사항 : ${noteText}]`;
@@ -2069,7 +2070,7 @@ export default function App() {
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg font-mono-tabular text-xs text-slate-800 break-all">
                 ✅예배 일정
                 <br />
-                1. [장소]날짜(삼일/주일) 설교주제&#123;설교자&#125;/묵도:성구 [특이사항 : 내용]
+                1. [장소] 날짜(삼일/주일) 설교주제 &#123;설교자&#125;/묵도:성구 [특이사항 : 내용]
               </div>
 
               <dl className="space-y-2 text-xs text-slate-600">
