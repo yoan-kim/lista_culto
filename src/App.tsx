@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Copy,
   Check,
@@ -15,9 +15,12 @@ import {
   FileText,
   Search,
   ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   ArrowUpDown,
+  Minimize2,
+  Maximize2,
 } from 'lucide-react';
 
 export type WorshipType = '주일' | '삼일';
@@ -44,6 +47,7 @@ export interface WorshipEntry {
   preacherCustom: string;
   scripture: string;
   note: string;
+  collapsed?: boolean;
 }
 
 const LOCATION_OPTIONS: LocationPreset[] = [
@@ -65,6 +69,36 @@ const PREACHER_OPTIONS: PreacherPreset[] = [
 const WORSHIP_TYPE_OPTIONS: WorshipType[] = ['주일', '삼일'];
 
 const STORAGE_KEY = 'worship_telegram_records_v2';
+
+/**
+ * Given any date (year, month, day), returns the next upcoming Sunday (주일) or Wednesday (삼일),
+ * automatically rolling over across month and year boundaries.
+ */
+function getNextWorshipDate(
+  year: number,
+  month: number,
+  day: number
+): { year: number; month: number; day: number; worshipType: WorshipType } {
+  for (let offset = 1; offset <= 7; offset++) {
+    const candidate = new Date(year, month - 1, day + offset);
+    const dow = candidate.getDay(); // 0 = Sunday, 3 = Wednesday
+    if (dow === 0 || dow === 3) {
+      return {
+        year: candidate.getFullYear(),
+        month: candidate.getMonth() + 1,
+        day: candidate.getDate(),
+        worshipType: dow === 0 ? '주일' : '삼일',
+      };
+    }
+  }
+  const fallback = new Date(year, month - 1, day + 3);
+  return {
+    year: fallback.getFullYear(),
+    month: fallback.getMonth() + 1,
+    day: fallback.getDate(),
+    worshipType: '삼일',
+  };
+}
 
 /**
  * Generates all Sundays (주일) and Wednesdays (삼일) for a given year and month.
@@ -97,6 +131,7 @@ function generateMonthlySchedule(
         preacherCustom: '',
         scripture: '',
         note: '',
+        collapsed: false,
       });
     }
   }
@@ -217,6 +252,7 @@ interface DateCalendarPopoverProps {
   onSelectDate: (year: number, month: number, day: number) => void;
   onClose: () => void;
   align?: 'left' | 'right';
+  vertical?: 'bottom' | 'top';
 }
 
 function DateCalendarPopover({
@@ -226,9 +262,24 @@ function DateCalendarPopover({
   onSelectDate,
   onClose,
   align = 'left',
+  vertical = 'bottom',
 }: DateCalendarPopoverProps) {
   const [viewYear, setViewYear] = useState<number>(year);
   const [viewMonth, setViewMonth] = useState<number>(month);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(event.target as Node)
+      ) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [onClose]);
 
   const firstDayOfWeek = new Date(viewYear, viewMonth - 1, 1).getDay();
   const daysInMonth = new Date(viewYear, viewMonth, 0).getDate();
@@ -253,11 +304,14 @@ function DateCalendarPopover({
 
   return (
     <div
+      ref={popoverRef}
       role="dialog"
       aria-label="날짜 선택 달력"
       className={`absolute ${
         align === 'right' ? 'right-0' : 'left-0'
-      } top-full mt-1.5 z-40 w-72 bg-white border border-slate-200 rounded-xl shadow-xl p-3.5 select-none`}
+      } ${
+        vertical === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+      } z-50 w-72 bg-white border border-slate-200 rounded-xl shadow-xl p-3.5 select-none`}
     >
       {/* Year & Month Header */}
       <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-slate-100">
@@ -393,6 +447,7 @@ export default function App() {
           return parsed.map((item: WorshipEntry) => ({
             ...item,
             note: item.note ?? '',
+            collapsed: item.collapsed ?? false,
           }));
         }
       }
@@ -407,12 +462,49 @@ export default function App() {
     year: number;
     month: number;
     day: number;
-  }>({ year: 2026, month: 11, day: 1 });
+  }>(() => {
+    if (entries.length > 0) {
+      const first = entries[0];
+      return { year: first.year, month: first.month, day: first.day };
+    }
+    return { year: 2026, month: 11, day: 1 };
+  });
+
   const [extractEndDate, setExtractEndDate] = useState<{
     year: number;
     month: number;
     day: number;
-  }>({ year: 2026, month: 11, day: 30 });
+  }>(() => {
+    if (entries.length > 0) {
+      const last = entries[entries.length - 1];
+      const lastDayOfMonth = new Date(last.year, last.month, 0).getDate();
+      return {
+        year: last.year,
+        month: last.month,
+        day: Math.max(last.day, lastDayOfMonth),
+      };
+    }
+    return { year: 2026, month: 11, day: 30 };
+  });
+
+  // Bottom sequential worship date adder target state
+  const [nextBottomDate, setNextBottomDate] = useState<{
+    year: number;
+    month: number;
+    day: number;
+    worshipType: WorshipType;
+  }>(() => {
+    if (entries.length > 0) {
+      const last = entries[entries.length - 1];
+      return getNextWorshipDate(last.year, last.month, last.day);
+    }
+    return { year: 2026, month: 11, day: 1, worshipType: '주일' };
+  });
+
+  // Collapsible main section toggle
+  const [isMainListSectionCollapsed, setIsMainListSectionCollapsed] =
+    useState<boolean>(false);
+
   const [onlyFilledRows, setOnlyFilledRows] = useState<boolean>(false);
   const [doubleLineBreak, setDoubleLineBreak] = useState<boolean>(true);
   const [worshipFilter, setWorshipFilter] = useState<'전체' | WorshipType>('전체');
@@ -465,6 +557,54 @@ export default function App() {
     );
   };
 
+  // Toggle collapse state of a single row
+  const toggleRowCollapse = (id: string) => {
+    setEntries((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, collapsed: !item.collapsed } : item
+      )
+    );
+  };
+
+  // Bulk collapse rows before the extraction start date (or toggle all)
+  const collapseRowsBeforeStartDate = () => {
+    const startNum =
+      extractStartDate.year * 10000 +
+      extractStartDate.month * 100 +
+      extractStartDate.day;
+    let collapsedCount = 0;
+
+    setEntries((prev) =>
+      prev.map((item) => {
+        const entryNum = item.year * 10000 + item.month * 100 + item.day;
+        if (entryNum < startNum) {
+          collapsedCount++;
+          return { ...item, collapsed: true };
+        }
+        return item;
+      })
+    );
+
+    if (collapsedCount > 0) {
+      showToast(
+        `추출 시작날짜(${extractStartDate.month}월 ${extractStartDate.day}일) 이전 ${collapsedCount}개 주차를 접었습니다.`
+      );
+    } else {
+      showToast(
+        '추출 시작날짜 이전에 해당하는 주차가 없습니다. 개별 행의 [접기] 버튼을 눌러 접을 수 있습니다.'
+      );
+    }
+  };
+
+  const setAllRowsCollapsed = (collapsed: boolean) => {
+    setEntries((prev) => prev.map((item) => ({ ...item, collapsed })));
+    showToast(
+      collapsed
+        ? '모든 예배 주차 행을 한 줄로 접었습니다.'
+        : '접혀 있던 모든 예배 주차 행을 펼쳤습니다.'
+    );
+  };
+
   // Select date from the calendar popover in a single click
   const handleSelectDateFromCalendar = (
     id: string,
@@ -506,6 +646,7 @@ export default function App() {
       preacherCustom: '',
       scripture: '',
       note: '',
+      collapsed: false,
     };
     const updated = [...entries];
     updated.splice(index + 1, 0, newEntry);
@@ -515,24 +656,16 @@ export default function App() {
     );
   };
 
-  // Add a new custom row at the bottom
+  // Add a new custom row at the bottom using nextBottomDate and automatically advance nextBottomDate to the next worship day
   const addCustomRowAtBottom = () => {
-    const last = entries[entries.length - 1];
-    const nextDay = last
-      ? Math.min(31, last.day + (last.worshipType === '주일' ? 3 : 4))
-      : 1;
-    const nextWorship: WorshipType = last
-      ? last.worshipType === '주일'
-        ? '삼일'
-        : '주일'
-      : '주일';
+    const target = nextBottomDate;
 
     const newEntry: WorshipEntry = {
-      id: `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(nextDay).padStart(2, '0')}-${Math.random().toString(36).slice(2, 7)}`,
-      year: selectedYear,
-      month: selectedMonth,
-      day: nextDay,
-      worshipType: nextWorship,
+      id: `${target.year}-${String(target.month).padStart(2, '0')}-${String(target.day).padStart(2, '0')}-${Math.random().toString(36).slice(2, 7)}`,
+      year: target.year,
+      month: target.month,
+      day: target.day,
+      worshipType: target.worshipType,
       locationPreset: '키토본부',
       locationCustom: '',
       topic: '',
@@ -540,9 +673,32 @@ export default function App() {
       preacherCustom: '',
       scripture: '',
       note: '',
+      collapsed: false,
     };
+
     setEntries((prev) => [...prev, newEntry]);
-    showToast('하단에 새 예배 기록 행을 추가했습니다.');
+
+    // If the added date is beyond current extractEndDate, expand extractEndDate automatically so it appears in Telegram preview
+    const addedNum = target.year * 10000 + target.month * 100 + target.day;
+    const endNum =
+      extractEndDate.year * 10000 +
+      extractEndDate.month * 100 +
+      extractEndDate.day;
+    if (addedNum > endNum) {
+      setExtractEndDate({
+        year: target.year,
+        month: target.month,
+        day: target.day,
+      });
+    }
+
+    // Automatically advance nextBottomDate to the next upcoming Wednesday (삼일) or Sunday (주일)
+    const upcoming = getNextWorshipDate(target.year, target.month, target.day);
+    setNextBottomDate(upcoming);
+
+    showToast(
+      `${String(target.month).padStart(2, '0')}월 ${String(target.day).padStart(2, '0')}일(${target.worshipType}) 행 추가 완료 (다음 추가일: ${String(upcoming.month).padStart(2, '0')}월 ${String(upcoming.day).padStart(2, '0')}일 ${upcoming.worshipType})`
+    );
   };
 
   // Delete a row
@@ -569,10 +725,11 @@ export default function App() {
     showToast('선택한 행을 삭제했습니다.');
   };
 
-  // Sort entries chronologically by month and day
+  // Sort entries chronologically by year, month, and day
   const sortEntriesByDate = () => {
     setEntries((prev) =>
       [...prev].sort((a, b) => {
+        if (a.year !== b.year) return a.year - b.year;
         if (a.month !== b.month) return a.month - b.month;
         return a.day - b.day;
       })
@@ -589,6 +746,10 @@ export default function App() {
     setExtractEndDate({ year: newYear, month: newMonth, day: lastDay });
     const freshSchedule = generateMonthlySchedule(newYear, newMonth, false);
     setEntries(freshSchedule);
+    if (freshSchedule.length > 0) {
+      const last = freshSchedule[freshSchedule.length - 1];
+      setNextBottomDate(getNextWorshipDate(last.year, last.month, last.day));
+    }
     showToast(
       `${newYear}년 ${newMonth}월 주일·삼일예배 일정을 자동 생성했습니다.`
     );
@@ -609,6 +770,10 @@ export default function App() {
       false
     );
     setEntries(cleanSchedule);
+    if (cleanSchedule.length > 0) {
+      const last = cleanSchedule[cleanSchedule.length - 1];
+      setNextBottomDate(getNextWorshipDate(last.year, last.month, last.day));
+    }
     showToast('모든 입력 칸을 빈 양식(기본 장소: 키토본부)으로 초기화했습니다.');
   };
 
@@ -620,6 +785,10 @@ export default function App() {
     setExtractEndDate({ year: 2026, month: 11, day: 30 });
     const sampleSchedule = generateMonthlySchedule(2026, 11, true);
     setEntries(sampleSchedule);
+    if (sampleSchedule.length > 0) {
+      const last = sampleSchedule[sampleSchedule.length - 1];
+      setNextBottomDate(getNextWorshipDate(last.year, last.month, last.day));
+    }
     showToast('11월 예시 데이터를 불러왔습니다.');
   };
 
@@ -707,10 +876,15 @@ export default function App() {
     [entries]
   );
 
+  const collapsedCount = useMemo(
+    () => entries.filter((e) => e.collapsed).length,
+    [entries]
+  );
+
   // Copy full Telegram output
   const handleCopyAll = async () => {
     if (!telegramOutputText.trim()) {
-      showToast('복사할 예배 기록이 없습니다.');
+      showToast('선택한 추출 기간 내에 복사할 예배 기록이 없습니다.');
       return;
     }
     try {
@@ -740,15 +914,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      {/* Invisible backdrop when a calendar popover is open so outside click closes it */}
-      {openCalendarRowId && (
-        <div
-          className="fixed inset-0 z-30"
-          onClick={() => setOpenCalendarRowId(null)}
-          aria-hidden="true"
-        />
-      )}
-
       {/* Top Bar Contract: 3 zones separated by gap-8 */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-3.5 bg-white border-b border-slate-200">
         {/* Zone 1: Single text element wordmark */}
@@ -825,12 +990,18 @@ export default function App() {
               <span>전체 {entries.length}개 행</span>
               <span aria-hidden="true">·</span>
               <span>작성 완료 {filledCount}건</span>
+              {collapsedCount > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>접힌 주차 {collapsedCount}개</span>
+                </>
+              )}
             </div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
               주일·삼일예배 설교 기록 및 텔레그램 추출
             </h1>
             <p className="mt-1 text-sm text-slate-600 max-w-2xl">
-              날짜 및 예배 구분 후 설교장소 · 설교주제 · 설교자 · 묵도성구 · 특이사항 순서로 기록하면 우측에서 텔레그램 양식으로 자동 정리됩니다.
+              지나간 주차는 삭제하지 않고 한 줄로 접어둘 수 있으며, 우측 추출 기간(시작날짜~끝날짜)을 선택해 원하는 날짜 구간만 텔레그램 텍스트로 복사할 수 있습니다.
             </p>
           </div>
 
@@ -978,15 +1149,69 @@ export default function App() {
 
             {/* Schedule Entry List Card */}
             <div className="bg-white border border-slate-200 rounded-xl">
-              <div className="px-4 py-3 bg-slate-50/80 border-b border-slate-200 rounded-t-xl flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                  <span>예배 일정별 상세 기록</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-slate-500">
-                    설교장소 → 설교주제 → 설교자 → 묵도성구 → 특이사항 순서
+              <div
+                className={`px-4 py-3 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3 ${
+                  isMainListSectionCollapsed
+                    ? 'rounded-xl'
+                    : 'border-b border-slate-200 rounded-t-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIsMainListSectionCollapsed((prev) => !prev)
+                    }
+                    className="inline-flex items-center gap-1.5 font-semibold text-slate-900 hover:text-slate-700 cursor-pointer"
+                  >
+                    {isMainListSectionCollapsed ? (
+                      <ChevronDown className="w-4 h-4 text-slate-500" />
+                    ) : (
+                      <ChevronUp className="w-4 h-4 text-slate-500" />
+                    )}
+                    <span>예배 일정별 상세 기록</span>
+                  </button>
+                  <span aria-hidden="true" className="text-slate-300">
+                    ·
+                  </span>
+                  <span className="text-slate-500 hidden sm:inline">
+                    지나간 주차는 [접기]를 눌러 한 줄로 접어둘 수 있습니다
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={collapseRowsBeforeStartDate}
+                    title="우측 추출 시작날짜보다 이전 주차들을 모두 한 줄로 접습니다"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Minimize2 className="w-3 h-3" />
+                    <span>시작일 이전 주차 접기</span>
+                  </button>
+
+                  {collapsedCount < entries.length ? (
+                    <button
+                      type="button"
+                      onClick={() => setAllRowsCollapsed(true)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <ChevronUp className="w-3 h-3" />
+                      <span>전체 주차 접기</span>
+                    </button>
+                  ) : null}
+
+                  {collapsedCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setAllRowsCollapsed(false)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-slate-900 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                      <span>전체 펼치기 ({collapsedCount})</span>
+                    </button>
+                  ) : null}
+
                   <button
                     type="button"
                     onClick={sortEntriesByDate}
@@ -995,399 +1220,585 @@ export default function App() {
                     <ArrowUpDown className="w-3 h-3" />
                     <span>날짜순 정렬</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={addCustomRowAtBottom}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-900 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>새 날짜 행 추가</span>
-                  </button>
                 </div>
               </div>
 
-              {displayedEntries.length === 0 ? (
-                <div className="p-12 text-center">
-                  <p className="text-sm font-medium text-slate-700">
-                    표시할 예배 기록 행이 없습니다.
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    검색어나 필터를 초기화하거나 새 예배 일정을 추가해 주세요.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWorshipFilter('전체');
-                      setSearchQuery('');
-                    }}
-                    className="mt-4 px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-                  >
-                    필터 초기화
-                  </button>
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-200">
-                  {displayedEntries.map((entry) => {
-                    const originalIndex = entries.findIndex(
-                      (e) => e.id === entry.id
-                    );
-                    const formattedLine = formatTelegramLine(entry);
-                    const filled = isEntryFilled(entry);
-                    const isCalendarOpen = openCalendarRowId === entry.id;
-
-                    return (
-                      <div
-                        key={entry.id}
-                        className={`p-4 transition-colors ${
-                          filled
-                            ? 'bg-white hover:bg-slate-50/60'
-                            : 'bg-slate-50/30 hover:bg-slate-50/80'
-                        }`}
+              {!isMainListSectionCollapsed && (
+                <>
+                  {displayedEntries.length === 0 ? (
+                    <div className="p-12 text-center">
+                      <p className="text-sm font-medium text-slate-700">
+                        표시할 예배 기록 행이 없습니다.
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        검색어나 필터를 초기화하거나 새 예배 일정을 추가해 주세요.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWorshipFilter('전체');
+                          setSearchQuery('');
+                        }}
+                        className="mt-4 px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                       >
-                        {/* Row 1: 날짜 및 예배 구분 (3 cols) -> 1. 설교장소 (3 cols) -> 2. 설교주제 (6 cols) */}
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
-                          {/* 날짜 및 예배 구분 */}
-                          <div className="md:col-span-3 relative">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              날짜 및 예배 구분
-                            </label>
-                            <div className="flex items-center gap-1.5">
-                              {/* One-Click Calendar Trigger Button */}
+                        필터 초기화
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-200">
+                      {displayedEntries.map((entry) => {
+                        const originalIndex = entries.findIndex(
+                          (e) => e.id === entry.id
+                        );
+                        const formattedLine = formatTelegramLine(entry);
+                        const filled = isEntryFilled(entry);
+                        const isCalendarOpen = openCalendarRowId === entry.id;
+
+                        const entryNum =
+                          entry.year * 10000 + entry.month * 100 + entry.day;
+                        const startNum =
+                          extractStartDate.year * 10000 +
+                          extractStartDate.month * 100 +
+                          extractStartDate.day;
+                        const endNum =
+                          extractEndDate.year * 10000 +
+                          extractEndDate.month * 100 +
+                          extractEndDate.day;
+                        const inExtractRange =
+                          entryNum >= startNum && entryNum <= endNum;
+
+                        // COLLAPSED VIEW (Compact 1-Line Summary Bar for Past Weeks)
+                        if (entry.collapsed) {
+                          return (
+                            <div
+                              key={entry.id}
+                              className="px-4 py-2.5 bg-slate-100/70 hover:bg-slate-100 transition-colors flex items-center justify-between gap-3"
+                            >
+                              <div
+                                onClick={() => toggleRowCollapse(entry.id)}
+                                className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+                              >
+                                <span className="font-mono-tabular text-xs font-bold text-slate-500 shrink-0">
+                                  {originalIndex + 1}.
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 text-[11px] font-semibold rounded-md shrink-0 font-mono-tabular ${
+                                    entry.worshipType === '주일'
+                                      ? 'bg-slate-900 text-white'
+                                      : 'bg-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  {String(entry.month).padStart(2, '0')}월{' '}
+                                  {String(entry.day).padStart(2, '0')}일 (
+                                  {entry.worshipType})
+                                </span>
+                                <span
+                                  className="text-xs text-slate-600 font-mono-tabular truncate"
+                                  title={formattedLine}
+                                >
+                                  {formattedLine}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[11px] text-slate-400">
+                                  {inExtractRange ? '추출포함' : '기간외'} ·{' '}
+                                  {filled ? '작성됨' : '미작성'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleRowCollapse(entry.id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+                                >
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                  <span>펼치기</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // EXPANDED VIEW
+                        return (
+                          <div
+                            key={entry.id}
+                            className={`p-4 transition-colors ${
+                              filled
+                                ? 'bg-white hover:bg-slate-50/60'
+                                : 'bg-slate-50/30 hover:bg-slate-50/80'
+                            }`}
+                          >
+                            {/* Top Mini Header of Row: Row Number, Extraction Range Status, and Collapse Button */}
+                            <div className="mb-2.5 flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 text-xs font-mono-tabular">
+                                <span className="font-bold text-slate-800">
+                                  #{originalIndex + 1}주차 기록
+                                </span>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
+                                <span
+                                  className={
+                                    inExtractRange
+                                      ? 'text-slate-600 font-medium'
+                                      : 'text-slate-400'
+                                  }
+                                >
+                                  {inExtractRange
+                                    ? '현재 추출 기간에 포함됨'
+                                    : '추출 기간 외'}
+                                </span>
+                              </div>
+
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setOpenCalendarRowId((prev) =>
-                                    prev === entry.id ? null : entry.id
-                                  )
-                                }
-                                aria-expanded={isCalendarOpen}
-                                aria-label="달력에서 날짜 선택"
-                                className={`inline-flex items-center gap-1.5 bg-white border rounded-lg px-2.5 py-1.5 font-mono-tabular text-xs font-semibold text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                                  isCalendarOpen
-                                    ? 'border-slate-900 ring-2 ring-slate-900/15'
-                                    : 'border-slate-200'
-                                }`}
+                                onClick={() => toggleRowCollapse(entry.id)}
+                                title="이 주차를 삭제하지 않고 한 줄로 접어둡니다"
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
                               >
-                                <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                                <span>
-                                  {String(entry.month).padStart(2, '0')}월{' '}
-                                  {String(entry.day).padStart(2, '0')}일
-                                </span>
+                                <ChevronUp className="w-3.5 h-3.5" />
+                                <span>이 주차 접기</span>
                               </button>
+                            </div>
 
-                              {/* Calendar Popover for One-Click Date Selection */}
-                              {isCalendarOpen && (
-                                <DateCalendarPopover
-                                  year={entry.year}
-                                  month={entry.month}
-                                  day={entry.day}
-                                  onSelectDate={(y, m, d) =>
-                                    handleSelectDateFromCalendar(
-                                      entry.id,
-                                      y,
-                                      m,
-                                      d
-                                    )
-                                  }
-                                  onClose={() => setOpenCalendarRowId(null)}
-                                />
-                              )}
+                            {/* Row 1: 날짜 및 예배 구분 (3 cols) -> 1. 설교장소 (3 cols) -> 2. 설교주제 (6 cols) */}
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                              {/* 날짜 및 예배 구분 */}
+                              <div className="md:col-span-3 relative">
+                                <label className="block text-xs font-medium text-slate-500 mb-1">
+                                  날짜 및 예배 구분
+                                </label>
+                                <div className="flex items-center gap-1.5">
+                                  {/* One-Click Calendar Trigger Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOpenCalendarRowId((prev) =>
+                                        prev === entry.id ? null : entry.id
+                                      )
+                                    }
+                                    aria-expanded={isCalendarOpen}
+                                    aria-label="달력에서 날짜 선택"
+                                    className={`inline-flex items-center gap-1.5 bg-white border rounded-lg px-2.5 py-1.5 font-mono-tabular text-xs font-semibold text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                                      isCalendarOpen
+                                        ? 'border-slate-900 ring-2 ring-slate-900/15'
+                                        : 'border-slate-200'
+                                    }`}
+                                  >
+                                    <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                    <span>
+                                      {String(entry.month).padStart(2, '0')}월{' '}
+                                      {String(entry.day).padStart(2, '0')}일
+                                    </span>
+                                  </button>
 
-                              {/* Worship Type Dropdown: (주일) or (삼일) */}
-                              <div className="relative flex-1 min-w-[78px]">
-                                <select
-                                  aria-label="예배 종류 선택 (주일 또는 삼일)"
-                                  value={entry.worshipType}
-                                  onChange={(e) =>
-                                    updateEntry(
-                                      entry.id,
-                                      'worshipType',
-                                      e.target.value as WorshipType
-                                    )
-                                  }
-                                  className={`w-full appearance-none pl-2.5 pr-7 py-1.5 text-xs font-semibold border rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900/15 cursor-pointer ${
-                                    entry.worshipType === '주일'
-                                      ? 'bg-slate-900 text-white border-slate-900'
-                                      : 'bg-slate-200 text-slate-700 border-slate-300'
-                                  }`}
-                                >
-                                  {WORSHIP_TYPE_OPTIONS.map((type) => (
-                                    <option
-                                      key={type}
-                                      value={type}
-                                      className={
-                                        type === '삼일'
-                                          ? 'bg-slate-100 text-slate-700'
-                                          : 'bg-white text-slate-900'
+                                  {/* Calendar Popover for One-Click Date Selection */}
+                                  {isCalendarOpen && (
+                                    <DateCalendarPopover
+                                      year={entry.year}
+                                      month={entry.month}
+                                      day={entry.day}
+                                      onSelectDate={(y, m, d) =>
+                                        handleSelectDateFromCalendar(
+                                          entry.id,
+                                          y,
+                                          m,
+                                          d
+                                        )
                                       }
+                                      onClose={() => setOpenCalendarRowId(null)}
+                                    />
+                                  )}
+
+                                  {/* Worship Type Dropdown: (주일) or (삼일) */}
+                                  <div className="relative flex-1 min-w-[78px]">
+                                    <select
+                                      aria-label="예배 종류 선택 (주일 또는 삼일)"
+                                      value={entry.worshipType}
+                                      onChange={(e) =>
+                                        updateEntry(
+                                          entry.id,
+                                          'worshipType',
+                                          e.target.value as WorshipType
+                                        )
+                                      }
+                                      className={`w-full appearance-none pl-2.5 pr-7 py-1.5 text-xs font-semibold border rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900/15 cursor-pointer ${
+                                        entry.worshipType === '주일'
+                                          ? 'bg-slate-900 text-white border-slate-900'
+                                          : 'bg-slate-200 text-slate-700 border-slate-300'
+                                      }`}
                                     >
-                                      ({type})
-                                    </option>
-                                  ))}
-                                </select>
-                                <ChevronDown
-                                  className={`w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ${
-                                    entry.worshipType === '주일'
-                                      ? 'text-slate-300'
-                                      : 'text-slate-600'
-                                  }`}
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* 1. 설교장소 Dropdown + Custom Input */}
-                          <div className="md:col-span-3">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              1. 설교장소 <span className="text-slate-400">[장소]</span>
-                            </label>
-                            <div className="space-y-1.5">
-                              <div className="relative">
-                                <select
-                                  aria-label="설교장소 선택"
-                                  value={entry.locationPreset}
-                                  onChange={(e) => {
-                                    const nextLoc = e.target
-                                      .value as LocationPreset;
-                                    updateEntry(
-                                      entry.id,
-                                      'locationPreset',
-                                      nextLoc
-                                    );
-                                    if (nextLoc === '기타') {
-                                      updateEntry(
-                                        entry.id,
-                                        'locationCustom',
-                                        ''
-                                      );
-                                    }
-                                  }}
-                                  className="w-full appearance-none pl-3 pr-8 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400 cursor-pointer"
-                                >
-                                  {LOCATION_OPTIONS.map((loc) => (
-                                    <option key={loc} value={loc}>
-                                      [{loc}]
-                                    </option>
-                                  ))}
-                                </select>
-                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                      {WORSHIP_TYPE_OPTIONS.map((type) => (
+                                        <option
+                                          key={type}
+                                          value={type}
+                                          className={
+                                            type === '삼일'
+                                              ? 'bg-slate-100 text-slate-700'
+                                              : 'bg-white text-slate-900'
+                                          }
+                                        >
+                                          ({type})
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <ChevronDown
+                                      className={`w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ${
+                                        entry.worshipType === '주일'
+                                          ? 'text-slate-300'
+                                          : 'text-slate-600'
+                                      }`}
+                                    />
+                                  </div>
+                                </div>
                               </div>
 
-                              {entry.locationPreset === '기타' && (
+                              {/* 1. 설교장소 Dropdown + Custom Input */}
+                              <div className="md:col-span-3">
+                                <label className="block text-xs font-medium text-slate-500 mb-1">
+                                  1. 설교장소{' '}
+                                  <span className="text-slate-400">[장소]</span>
+                                </label>
+                                <div className="space-y-1.5">
+                                  <div className="relative">
+                                    <select
+                                      aria-label="설교장소 선택"
+                                      value={entry.locationPreset}
+                                      onChange={(e) => {
+                                        const nextLoc = e.target
+                                          .value as LocationPreset;
+                                        updateEntry(
+                                          entry.id,
+                                          'locationPreset',
+                                          nextLoc
+                                        );
+                                        if (nextLoc === '기타') {
+                                          updateEntry(
+                                            entry.id,
+                                            'locationCustom',
+                                            ''
+                                          );
+                                        }
+                                      }}
+                                      className="w-full appearance-none pl-3 pr-8 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400 cursor-pointer"
+                                    >
+                                      {LOCATION_OPTIONS.map((loc) => (
+                                        <option key={loc} value={loc}>
+                                          [{loc}]
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                  </div>
+
+                                  {entry.locationPreset === '기타' && (
+                                    <input
+                                      type="text"
+                                      value={entry.locationCustom}
+                                      onChange={(e) =>
+                                        updateEntry(
+                                          entry.id,
+                                          'locationCustom',
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="입력해주세요 (예: 빠스따사)"
+                                      className={`w-full px-2.5 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                        entry.locationCustom.trim()
+                                          ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
+                                          : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
+                                      }`}
+                                    />
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* 2. 설교주제 Input */}
+                              <div className="md:col-span-6">
+                                <label className="block text-xs font-medium text-slate-500 mb-1">
+                                  2. 설교주제
+                                </label>
                                 <input
                                   type="text"
-                                  value={entry.locationCustom}
+                                  value={entry.topic}
                                   onChange={(e) =>
                                     updateEntry(
                                       entry.id,
-                                      'locationCustom',
+                                      'topic',
                                       e.target.value
                                     )
                                   }
-                                  placeholder="입력해주세요 (예: 빠스따사)"
-                                  className={`w-full px-2.5 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
-                                    entry.locationCustom.trim()
+                                  placeholder="입력해주세요 (예: 중등 25과 신천지 예수교 증거장막성전)"
+                                  className={`w-full px-3 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                    entry.topic.trim()
                                       ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
                                       : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
                                   }`}
                                 />
-                              )}
+                              </div>
                             </div>
-                          </div>
 
-                          {/* 2. 설교주제 Input */}
-                          <div className="md:col-span-6">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              2. 설교주제
-                            </label>
-                            <input
-                              type="text"
-                              value={entry.topic}
-                              onChange={(e) =>
-                                updateEntry(entry.id, 'topic', e.target.value)
-                              }
-                              placeholder="입력해주세요 (예: 중등 25과 신천지 예수교 증거장막성전)"
-                              className={`w-full px-3 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
-                                entry.topic.trim()
-                                  ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
-                                  : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
-                              }`}
-                            />
-                          </div>
-                        </div>
+                            {/* Row 2: 3. 설교자 (3 cols) -> 4. 묵도성구 (3 cols) -> 5. 특이사항 (4 cols) -> 행 액션 (2 cols) */}
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                              {/* 3. 설교자 Dropdown + Custom Input */}
+                              <div className="md:col-span-3">
+                                <label className="block text-xs font-medium text-slate-500 mb-1">
+                                  3. 설교자{' '}
+                                  <span className="text-slate-400">
+                                    &#123;설교자&#125;
+                                  </span>
+                                </label>
+                                <div className="space-y-1.5">
+                                  <div className="relative">
+                                    <select
+                                      aria-label="설교자 선택"
+                                      value={entry.preacherPreset}
+                                      onChange={(e) => {
+                                        const nextPreacher = e.target
+                                          .value as PreacherPreset;
+                                        updateEntry(
+                                          entry.id,
+                                          'preacherPreset',
+                                          nextPreacher
+                                        );
+                                        if (nextPreacher === '기타') {
+                                          updateEntry(
+                                            entry.id,
+                                            'preacherCustom',
+                                            ''
+                                          );
+                                        }
+                                      }}
+                                      className="w-full appearance-none pl-3 pr-8 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400 cursor-pointer"
+                                    >
+                                      {PREACHER_OPTIONS.map((preacher) => (
+                                        <option key={preacher} value={preacher}>
+                                          &#123;{preacher}&#125;
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                  </div>
 
-                        {/* Row 2: 3. 설교자 (3 cols) -> 4. 묵도성구 (3 cols) -> 5. 특이사항 (4 cols) -> 행 액션 (2 cols) */}
-                        <div className="mt-3 grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
-                          {/* 3. 설교자 Dropdown + Custom Input */}
-                          <div className="md:col-span-3">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              3. 설교자 <span className="text-slate-400">&#123;설교자&#125;</span>
-                            </label>
-                            <div className="space-y-1.5">
-                              <div className="relative">
-                                <select
-                                  aria-label="설교자 선택"
-                                  value={entry.preacherPreset}
-                                  onChange={(e) => {
-                                    const nextPreacher = e.target
-                                      .value as PreacherPreset;
-                                    updateEntry(
-                                      entry.id,
-                                      'preacherPreset',
-                                      nextPreacher
-                                    );
-                                    if (nextPreacher === '기타') {
-                                      updateEntry(
-                                        entry.id,
-                                        'preacherCustom',
-                                        ''
-                                      );
-                                    }
-                                  }}
-                                  className="w-full appearance-none pl-3 pr-8 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400 cursor-pointer"
-                                >
-                                  {PREACHER_OPTIONS.map((preacher) => (
-                                    <option key={preacher} value={preacher}>
-                                      &#123;{preacher}&#125;
-                                    </option>
-                                  ))}
-                                </select>
-                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                  {entry.preacherPreset === '기타' && (
+                                    <input
+                                      type="text"
+                                      value={entry.preacherCustom}
+                                      onChange={(e) =>
+                                        updateEntry(
+                                          entry.id,
+                                          'preacherCustom',
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="입력해주세요"
+                                      className={`w-full px-2.5 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                        entry.preacherCustom.trim()
+                                          ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
+                                          : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
+                                      }`}
+                                    />
+                                  )}
+                                </div>
                               </div>
 
-                              {entry.preacherPreset === '기타' && (
+                              {/* 4. 묵도성구 Input */}
+                              <div className="md:col-span-3">
+                                <label className="block text-xs font-medium text-slate-500 mb-1">
+                                  4. 묵도성구{' '}
+                                  <span className="text-slate-400">
+                                    /묵도:성구
+                                  </span>
+                                </label>
                                 <input
                                   type="text"
-                                  value={entry.preacherCustom}
+                                  value={entry.scripture}
                                   onChange={(e) =>
                                     updateEntry(
                                       entry.id,
-                                      'preacherCustom',
+                                      'scripture',
                                       e.target.value
                                     )
                                   }
-                                  placeholder="입력해주세요"
-                                  className={`w-full px-2.5 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
-                                    entry.preacherCustom.trim()
+                                  placeholder="입력해주세요 (예: 마13:24-27)"
+                                  className={`w-full px-3 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
+                                    entry.scripture.trim()
                                       ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
                                       : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
                                   }`}
                                 />
-                              )}
+                              </div>
+
+                              {/* 5. 특이사항 Input (Optional - Soft Yellow Tint) */}
+                              <div className="md:col-span-4">
+                                <label className="block text-xs font-medium text-slate-500 mb-1">
+                                  5. 특이사항{' '}
+                                  <span className="text-slate-400">
+                                    [특이사항 : 내용] (미입력 시 생략)
+                                  </span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={entry.note || ''}
+                                  onChange={(e) =>
+                                    updateEntry(
+                                      entry.id,
+                                      'note',
+                                      e.target.value
+                                    )
+                                  }
+                                  placeholder="입력해주세요 (선택사항)"
+                                  className="w-full px-3 py-1.5 text-xs bg-amber-50 border border-amber-200 rounded-lg text-slate-900 placeholder:text-amber-700/50 focus:bg-amber-50/70 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 transition-colors"
+                                />
+                              </div>
+
+                              {/* Row Action Buttons */}
+                              <div className="md:col-span-2 flex items-center justify-end gap-1.5 md:pt-5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    duplicateDateRow(originalIndex)
+                                  }
+                                  title="같은 날짜에 다른 장소 예배 추가"
+                                  className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>추가</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleCopySingleRow(entry, originalIndex)
+                                  }
+                                  title="이 줄만 복사"
+                                  className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  {copiedRowId === entry.id ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5 text-slate-500" />
+                                  )}
+                                  <span>복사</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => removeRow(entry.id)}
+                                  title="이 행 삭제"
+                                  aria-label="행 삭제"
+                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0 cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
-                          </div>
 
-                          {/* 4. 묵도성구 Input */}
-                          <div className="md:col-span-3">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              4. 묵도성구 <span className="text-slate-400">/묵도:성구</span>
-                            </label>
-                            <input
-                              type="text"
-                              value={entry.scripture}
-                              onChange={(e) =>
-                                updateEntry(entry.id, 'scripture', e.target.value)
-                              }
-                              placeholder="입력해주세요 (예: 마13:24-27)"
-                              className={`w-full px-3 py-1.5 text-xs border rounded-lg text-slate-900 transition-colors focus:outline-none focus:ring-2 ${
-                                entry.scripture.trim()
-                                  ? 'bg-white border-slate-200 placeholder:text-slate-400 focus:ring-slate-900/15 focus:border-slate-400'
-                                  : 'bg-rose-50 border-rose-300 placeholder:text-rose-400 focus:bg-white focus:ring-rose-500/20 focus:border-rose-400'
-                              }`}
-                            />
-                          </div>
-
-                          {/* 5. 특이사항 Input (Optional - Soft Yellow Tint) */}
-                          <div className="md:col-span-4">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              5. 특이사항{' '}
-                              <span className="text-slate-400">
-                                [특이사항 : 내용] (미입력 시 생략)
+                            {/* Live Inline Formatted Preview Line */}
+                            <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500 font-mono-tabular">
+                              <span
+                                className="truncate"
+                                title={`${originalIndex + 1}. ${formattedLine}`}
+                              >
+                                {originalIndex + 1}. {formattedLine}
                               </span>
-                            </label>
-                            <input
-                              type="text"
-                              value={entry.note || ''}
-                              onChange={(e) =>
-                                updateEntry(entry.id, 'note', e.target.value)
-                              }
-                              placeholder="입력해주세요 (선택사항)"
-                              className="w-full px-3 py-1.5 text-xs bg-amber-50 border border-amber-200 rounded-lg text-slate-900 placeholder:text-amber-700/50 focus:bg-amber-50/70 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 transition-colors"
-                            />
+                              <span className="shrink-0 text-[11px] text-slate-400">
+                                {filled ? '작성됨' : '미작성'}
+                              </span>
+                            </div>
                           </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                          {/* Row Action Buttons */}
-                          <div className="md:col-span-2 flex items-center justify-end gap-1.5 md:pt-5">
-                            <button
-                              type="button"
-                              onClick={() => duplicateDateRow(originalIndex)}
-                              title="같은 날짜에 다른 장소 예배 추가"
-                              className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>추가</span>
-                            </button>
+                  {/* Bottom Add Row Footer with Starting Date Calendar Picker & Auto-Next Worship Day */}
+                  <div className="p-3.5 bg-slate-50 border-t border-slate-200 rounded-b-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="text-xs text-slate-500">
+                      <span>
+                        달력에서 시작 날짜를 한 번 선택하면, 이후{' '}
+                        <strong className="font-semibold text-slate-700">
+                          + 하단에 예배 행 추가
+                        </strong>
+                        를 누를 때마다 다음 예배일(삼일·주일)로 자동 넘어갑니다.
+                      </span>
+                    </div>
 
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleCopySingleRow(entry, originalIndex)
-                              }
-                              title="이 줄만 복사"
-                              className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              {copiedRowId === entry.id ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5 text-slate-500" />
-                              )}
-                              <span>복사</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => removeRow(entry.id)}
-                              title="이 행 삭제"
-                              aria-label="행 삭제"
-                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0 cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Live Inline Formatted Preview Line */}
-                        <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500 font-mono-tabular">
-                          <span
-                            className="truncate"
-                            title={`${originalIndex + 1}. ${formattedLine}`}
-                          >
-                            {originalIndex + 1}. {formattedLine}
+                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                      {/* Bottom Date Picker Trigger */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenCalendarRowId((prev) =>
+                              prev === 'bottom-next-date'
+                                ? null
+                                : 'bottom-next-date'
+                            )
+                          }
+                          aria-expanded={
+                            openCalendarRowId === 'bottom-next-date'
+                          }
+                          title="추가할 시작 날짜(삼일 또는 주일)를 달력에서 선택하세요"
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold font-mono-tabular bg-white border rounded-lg hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap ${
+                            openCalendarRowId === 'bottom-next-date'
+                              ? 'border-slate-900 ring-2 ring-slate-900/15'
+                              : 'border-slate-300 text-slate-800'
+                          }`}
+                        >
+                          <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span>
+                            추가할 날짜:{' '}
+                            {String(nextBottomDate.month).padStart(2, '0')}월{' '}
+                            {String(nextBottomDate.day).padStart(2, '0')}일 (
+                            {nextBottomDate.worshipType})
                           </span>
-                          <span className="shrink-0 text-[11px] text-slate-400">
-                            {filled ? '작성됨' : '미작성'}
-                          </span>
-                        </div>
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        </button>
+
+                        {openCalendarRowId === 'bottom-next-date' && (
+                          <DateCalendarPopover
+                            year={nextBottomDate.year}
+                            month={nextBottomDate.month}
+                            day={nextBottomDate.day}
+                            align="right"
+                            vertical="top"
+                            onSelectDate={(y, m, d) => {
+                              const dow = new Date(y, m - 1, d).getDay();
+                              const wType: WorshipType =
+                                dow === 0
+                                  ? '주일'
+                                  : dow === 3
+                                    ? '삼일'
+                                    : nextBottomDate.worshipType;
+                              setNextBottomDate({
+                                year: y,
+                                month: m,
+                                day: d,
+                                worshipType: wType,
+                              });
+                              showToast(
+                                `하단 추가 시작 날짜가 ${String(m).padStart(2, '0')}월 ${String(d).padStart(2, '0')}일(${wType})로 설정되었습니다.`
+                              );
+                            }}
+                            onClose={() => setOpenCalendarRowId(null)}
+                          />
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
 
-              {/* Bottom Add Row Footer */}
-              <div className="p-3 bg-slate-50 border-t border-slate-200 rounded-b-xl flex items-center justify-between">
-                <span className="text-xs text-slate-500">
-                  11월 01일(주일) → 11월 04일(삼일) → 11월 08일(주일) 순으로 자동 배치됨
-                </span>
-                <button
-                  type="button"
-                  onClick={addCustomRowAtBottom}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>하단에 예배 행 추가</span>
-                </button>
-              </div>
+                      {/* Add Row Button */}
+                      <button
+                        type="button"
+                        onClick={addCustomRowAtBottom}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 border border-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>하단에 예배 행 추가</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -1403,7 +1814,7 @@ export default function App() {
                     텔레그램 추출 텍스트
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    날짜순으로 자동 정리된 복사 전용 텍스트입니다.
+                    선택한 시작날짜~끝날짜 사이의 예배만 추출됩니다.
                   </p>
                 </div>
                 <span className="font-mono-tabular text-xs font-semibold text-slate-600">
@@ -1420,28 +1831,49 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      const lastDay = new Date(
-                        selectedYear,
-                        selectedMonth,
-                        0
-                      ).getDate();
-                      setExtractStartDate({
-                        year: selectedYear,
-                        month: selectedMonth,
-                        day: 1,
-                      });
-                      setExtractEndDate({
-                        year: selectedYear,
-                        month: selectedMonth,
-                        day: lastDay,
-                      });
-                      showToast(
-                        `${selectedMonth}월 전체 기간(01일~${lastDay}일)으로 설정했습니다.`
-                      );
+                      if (entries.length > 0) {
+                        const sorted = [...entries].sort((a, b) => {
+                          if (a.year !== b.year) return a.year - b.year;
+                          if (a.month !== b.month) return a.month - b.month;
+                          return a.day - b.day;
+                        });
+                        const first = sorted[0];
+                        const last = sorted[sorted.length - 1];
+                        setExtractStartDate({
+                          year: first.year,
+                          month: first.month,
+                          day: first.day,
+                        });
+                        setExtractEndDate({
+                          year: last.year,
+                          month: last.month,
+                          day: last.day,
+                        });
+                        showToast('전체 예배 일정 기간으로 설정했습니다.');
+                      } else {
+                        const lastDay = new Date(
+                          selectedYear,
+                          selectedMonth,
+                          0
+                        ).getDate();
+                        setExtractStartDate({
+                          year: selectedYear,
+                          month: selectedMonth,
+                          day: 1,
+                        });
+                        setExtractEndDate({
+                          year: selectedYear,
+                          month: selectedMonth,
+                          day: lastDay,
+                        });
+                        showToast(
+                          `${selectedMonth}월 전체 기간(01일~${lastDay}일)으로 설정했습니다.`
+                        );
+                      }
                     }}
                     className="text-[11px] font-medium text-slate-500 hover:text-slate-900 underline underline-offset-2 cursor-pointer"
                   >
-                    이번 달 전체
+                    전체 일정 선택
                   </button>
                 </div>
 
@@ -1491,6 +1923,9 @@ export default function App() {
                           if (newStartNum > currEndNum) {
                             setExtractEndDate({ year: y, month: m, day: d });
                           }
+                          showToast(
+                            `추출 시작날짜가 ${String(m).padStart(2, '0')}월 ${String(d).padStart(2, '0')}일로 변경되었습니다.`
+                          );
                         }}
                         onClose={() => setOpenCalendarRowId(null)}
                       />
@@ -1542,6 +1977,9 @@ export default function App() {
                           if (newEndNum < currStartNum) {
                             setExtractStartDate({ year: y, month: m, day: d });
                           }
+                          showToast(
+                            `추출 끝날짜가 ${String(m).padStart(2, '0')}월 ${String(d).padStart(2, '0')}일로 변경되었습니다.`
+                          );
                         }}
                         onClose={() => setOpenCalendarRowId(null)}
                       />
@@ -1576,14 +2014,19 @@ export default function App() {
               {/* Extracted Textarea Box */}
               <div className="mt-3.5">
                 <div className="flex items-center justify-between text-xs text-slate-500 mb-1.5">
-                  <span>미리보기 (직접 드래그 또는 아래 버튼으로 전체 복사)</span>
+                  <span>
+                    {String(extractStartDate.month).padStart(2, '0')}월{' '}
+                    {String(extractStartDate.day).padStart(2, '0')}일 ~{' '}
+                    {String(extractEndDate.month).padStart(2, '0')}월{' '}
+                    {String(extractEndDate.day).padStart(2, '0')}일 추출 결과
+                  </span>
                 </div>
                 <textarea
                   readOnly
                   aria-label="텔레그램 추출 결과 텍스트"
                   value={
                     telegramOutputText ||
-                    '아직 입력된 예배 기록이 없습니다.\n좌측 기록표에서 설교주제나 묵도성구를 입력하면 이곳에 텔레그램 양식이 자동으로 생성됩니다.'
+                    '선택하신 기간(시작날짜 ~ 끝날짜) 내에 해당하는 예배 기록이 없습니다.\n추출 기간을 조정하거나 좌측에서 예배 기록을 입력해 주세요.'
                   }
                   rows={12}
                   onClick={(e) => e.currentTarget.select()}
@@ -1624,7 +2067,9 @@ export default function App() {
               </div>
 
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg font-mono-tabular text-xs text-slate-800 break-all">
-                [장소]날짜(삼일/주일) 설교주제&#123;설교자&#125;/묵도:성구 [특이사항 : 내용]
+                ✅예배 일정
+                <br />
+                1. [장소]날짜(삼일/주일) 설교주제&#123;설교자&#125;/묵도:성구 [특이사항 : 내용]
               </div>
 
               <dl className="space-y-2 text-xs text-slate-600">
@@ -1636,7 +2081,7 @@ export default function App() {
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="font-medium text-slate-700 shrink-0">2. 설교주제</dt>
-                  <dd className="text-right">직접 입력</dd>
+                  <dd className="text-right">직접 입력 (미입력 시 분홍색 표시)</dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="font-medium text-slate-700 shrink-0">3. 설교자</dt>
@@ -1651,7 +2096,7 @@ export default function App() {
                 <div className="flex justify-between gap-2">
                   <dt className="font-medium text-slate-700 shrink-0">5. 특이사항</dt>
                   <dd className="text-right">
-                    입력 시에만 [특이사항 : 내용] 자동 추가
+                    연한 노란색 칸 · 입력 시에만 [특이사항 : 내용] 추가
                   </dd>
                 </div>
               </dl>
